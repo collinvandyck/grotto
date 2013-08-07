@@ -2,12 +2,59 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func main() {
+	var confFlag = flag.String("conf", "grotto.conf", "the config file")
+	flag.Parse()
+
+	conf, err := readConfig(*confFlag)
+	if err != nil {
+		fmt.Printf("Could not read config file: %s", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%+v\n", conf)
+	for {
+		stats := monitorCpuUsage()
+		for stat := range stats {
+			fmt.Println(stat)
+		}
+	}
+}
+
+// the global config struct.
+type config struct {
+    Librato struct {
+        Token string
+    }
+}
+
+// readConfig reads the global config for the agent and also checks to make
+// sure required fields are present
+func readConfig(loc string) (*config, error) {
+	contents, err := ioutil.ReadFile(loc)
+	if err != nil {
+		return nil, err
+	}
+	var conf config
+	err = json.Unmarshal(contents, &conf)
+	if err != nil {
+		return nil, err
+	}
+    if conf.Librato.Token == "" {
+        return nil, errors.New("Missing an API token for Librato")
+    }
+	return &conf, nil
+}
 
 // cpuStat holds values about cpu usage
 type cpuStat struct {
@@ -40,16 +87,6 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		system: other.system - s.system,
 		idle:   other.idle - s.idle,
 		total:  other.total - s.total}
-}
-
-func main() {
-	for {
-		stats := monitorCpuUsage()
-		for stat := range stats {
-			fmt.Println(stat)
-		}
-	}
-
 }
 
 // monitorCpuUsage starts a goroutine and sends cpuStats on a returned channel.
@@ -88,7 +125,7 @@ func monitorCpuUsage() chan *cpuStat {
 func readCpuStats() ([]cpuStat, error) {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
-        return nil, err
+		return nil, err
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
