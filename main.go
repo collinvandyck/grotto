@@ -129,6 +129,10 @@ func (s *cpuStat) percentage(of int) float64 {
 	return float64(of) / float64(s.total)
 }
 
+func (s *cpuStat) usagePercentage() float64 {
+    return s.percentage(s.user + s.nice + s.system)
+}
+
 func (s *cpuStat) userPercentage() float64 {
 	return s.percentage(s.user)
 }
@@ -161,11 +165,12 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 
 // gauge converts a cpuStat into a slice of gauges
 func (s *cpuStat) metrics() []gauge {
-	result := make([]gauge, 4)
+	result := make([]gauge, 5)
 	result[0] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "user"), MeasureTime: s.epoch, Value: s.userPercentage(), Source: hostname}
 	result[1] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "nice"), MeasureTime: s.epoch, Value: s.nicePercentage(), Source: hostname}
 	result[2] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "system"), MeasureTime: s.epoch, Value: s.systemPercentage(), Source: hostname}
 	result[3] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "idle"), MeasureTime: s.epoch, Value: s.idlePercentage(), Source: hostname}
+	result[4] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "usage"), MeasureTime: s.epoch, Value: s.usagePercentage(), Source: hostname}
 	return result
 }
 
