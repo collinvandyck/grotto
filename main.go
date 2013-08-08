@@ -2,40 +2,91 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 )
 
+var (
+	conf         *config
+	httpClient   http.Client
+	cpuDelay     = 1 * time.Second
+	libratoDelay = 2 * time.Second
+	hostname     string
+)
+
 func main() {
 	var confFlag = flag.String("conf", "grotto.conf", "the config file")
+	var err error
 	flag.Parse()
 
-	conf, err := readConfig(*confFlag)
+	conf, err = readConfig(*confFlag)
 	if err != nil {
 		fmt.Printf("Could not read config file: %s", err)
 		os.Exit(1)
 	}
-	fmt.Printf("%+v\n", conf)
-	for {
-		stats := monitorCpuUsage()
-		for stat := range stats {
-			fmt.Println(stat)
-		}
+
+	hostname, err = os.Hostname()
+	if err != nil {
+		fmt.Printf("Could not read hostname: %s", err)
+		os.Exit(1)
 	}
+
+	metrics := startMetricsSender()
+	monitorCpuUsage(metrics)
+
+	var quit chan bool
+	<-quit
+}
+
+// the main struct we'll be sending to Librato
+type libratoPayload struct {
+	Gauges []gauge `json:"gauges"`
+}
+
+// libratoPayload adds a metric to its internal state. it returns an
+// error if it does not know what to do with the metric
+func (p *libratoPayload) addMetric(metric interface{}) error {
+	switch metric := metric.(type) {
+	default:
+		return fmt.Errorf("Unsupported metric: %s", reflect.TypeOf(metric))
+	case gauge:
+		p.Gauges = append(p.Gauges, metric)
+	}
+	return nil
+}
+
+func (p *libratoPayload) size() int {
+	return len(p.Gauges)
+}
+
+// a gauge is a one-off reading that is sent to Librato
+type gauge struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description,omitempty"`
+	DisplayName string  `json:"display_name,omitempty"`
+	MeasureTime int64   `json:"measure_time"` // epoch seconds
+	Value       float64 `json:"value"`
+	Source      string  `json:"source,omitempty"`
 }
 
 // the global config struct.
 type config struct {
-    Librato struct {
-        Token string
-    }
+	Librato struct {
+		Email string
+		Token string
+		Url   string
+	}
 }
 
 // readConfig reads the global config for the agent and also checks to make
@@ -50,9 +101,15 @@ func readConfig(loc string) (*config, error) {
 	if err != nil {
 		return nil, err
 	}
-    if conf.Librato.Token == "" {
-        return nil, errors.New("Missing an API token for Librato")
-    }
+	if conf.Librato.Token == "" {
+		return nil, errors.New("Missing an API token for Librato")
+	}
+	if conf.Librato.Email == "" {
+		return nil, errors.New("Missing Email address for Librato")
+	}
+	if conf.Librato.Url == "" {
+		return nil, errors.New("Missing Url for Librato")
+	}
 	return &conf, nil
 }
 
@@ -66,15 +123,24 @@ type cpuStat struct {
 	total  int
 }
 
-func (s *cpuStat) String() string {
-	var total float64 = float64(s.total)
-	return fmt.Sprintf(
-		"{%s User:%0.2f Nice:%0.2f System:%0.2f Idle:%0.2f}",
-		s.name,
-		float64(s.user*100)/total,
-		float64(s.nice*100)/total,
-		float64(s.system*100)/total,
-		float64(s.idle*100)/total)
+func (s *cpuStat) percentage(of int) float64 {
+	return float64(of) / float64(s.total)
+}
+
+func (s *cpuStat) userPercentage() float64 {
+	return s.percentage(s.user)
+}
+
+func (s *cpuStat) nicePercentage() float64 {
+	return s.percentage(s.nice)
+}
+
+func (s *cpuStat) systemPercentage() float64 {
+	return s.percentage(s.system)
+}
+
+func (s *cpuStat) idlePercentage() float64 {
+	return s.percentage(s.idle)
 }
 
 // difference subtracts the values of one cpuStat from the receiver and returns
@@ -89,12 +155,79 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		total:  other.total - s.total}
 }
 
-// monitorCpuUsage starts a goroutine and sends cpuStats on a returned channel.
+// gauge converts a cpuStat into a slice of gauges
+func (s *cpuStat) metrics() []gauge {
+	var measure_time int64 = time.Now().Unix()
+	result := make([]gauge, 4)
+	result[0] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "user"), MeasureTime: measure_time, Value: s.userPercentage(), Source: hostname}
+	result[1] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "nice"), MeasureTime: measure_time, Value: s.nicePercentage(), Source: hostname}
+	result[2] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "system"), MeasureTime: measure_time, Value: s.systemPercentage(), Source: hostname}
+	result[3] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "idle"), MeasureTime: measure_time, Value: s.idlePercentage(), Source: hostname}
+	return result
+}
+
+// startMetricsSender starts the goroutine that will consume payloads
+// and send them to Librato
+func startMetricsSender() chan interface{} {
+	metrics := make(chan interface{})
+	go func() {
+		// setup state
+		timeout := time.After(libratoDelay)
+		payload := new(libratoPayload)
+		for {
+			// gather up as many payloads as we can in libratoDelay.
+			select {
+			case metric := <-metrics:
+				// sweet. put this metric into the payload
+				if err := payload.addMetric(metric); err != nil {
+					fmt.Printf("Could not add metric: %s\n", err)
+				}
+			case <-timeout:
+				fmt.Printf("Sending %d metrics to librato\n", payload.size())
+				// pack up and send it out
+				go func(payload *libratoPayload) {
+					if err := sendPayload(payload); err != nil {
+						fmt.Printf("Could not send payload: %s\n", err)
+					}
+				}(payload)
+				timeout = time.After(libratoDelay)
+				payload = new(libratoPayload)
+			}
+		}
+	}()
+	return metrics
+}
+
+func sendPayload(payload interface{}) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	body := bytes.NewReader(data)
+	req, err := http.NewRequest("POST", conf.Librato.Url, body)
+	if err != nil {
+		return err
+	}
+	credentials := fmt.Sprintf("%s:%s", conf.Librato.Email, conf.Librato.Token)
+	authorization := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(credentials)))
+	req.Header.Add("Authorization", authorization)
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("Librato responded with %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// monitorCpuUsage starts a goroutine and sends cpuStats to a channel
 // each successive cpuStat for a particular cpu will only consider values
 // since the last measurement.
-func monitorCpuUsage() chan *cpuStat {
+func monitorCpuUsage(metrics chan interface{}) {
 	lookup := make(map[string]cpuStat)
-	ch := make(chan *cpuStat)
 	go func() {
 		for {
 			cpuStats, err := readCpuStats()
@@ -110,14 +243,15 @@ func monitorCpuUsage() chan *cpuStat {
 						continue
 					}
 					difference := cumulative.difference(&stat)
-					ch <- &difference
+					for _, metric := range difference.metrics() {
+						metrics <- metric
+					}
 					lookup[stat.name] = stat
 				}
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(cpuDelay)
 		}
 	}()
-	return ch
 }
 
 // readCpuStats reads /proc/stat, parses the values for the individual cpus
