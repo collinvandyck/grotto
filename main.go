@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +122,7 @@ type cpuStat struct {
 	system int
 	idle   int
 	total  int
-	epoch  int64
+    epoch  int64
 }
 
 func (s *cpuStat) percentage(of int) float64 {
@@ -154,8 +155,8 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		system: other.system - s.system,
 		idle:   other.idle - s.idle,
 		total:  other.total - s.total,
-		epoch:  other.epoch,
-	}
+        epoch:  other.epoch,
+    }
 }
 
 // gauge converts a cpuStat into a slice of gauges
@@ -185,7 +186,6 @@ func startMetricsSender() chan interface{} {
 					fmt.Printf("Could not add metric: %s\n", err)
 				}
 			case <-timeout:
-				fmt.Printf("Sending %d metrics to librato\n", payload.size())
 				// pack up and send it out
 				go func(payload *libratoPayload) {
 					if err := sendPayload(payload); err != nil {
@@ -256,6 +256,12 @@ func monitorCpuUsage(metrics chan interface{}) {
 	}()
 }
 
+// split splits a str based on separators of one or more whitespace tokens
+var whitespaceRegexp = regexp.MustCompile("\\s+")
+func split(str string) []string {
+    return whitespaceRegexp.Split(str, -1)
+}
+
 // readCpuStats reads /proc/stat, parses the values for the individual cpus
 // and then returns a slice of cpuStat, one for each cpu
 func readCpuStats() ([]cpuStat, error) {
@@ -272,12 +278,12 @@ func readCpuStats() ([]cpuStat, error) {
 	scanner := bufio.NewScanner(bufio.NewReader(file))
 	for scanner.Scan() {
 		text := scanner.Text()
-		tokens := strings.Split(text, " ")
+        tokens := split(text)
 		cpuName := tokens[0]
 		if strings.HasPrefix(cpuName, "cpu") {
 			var stat cpuStat
 			stat.name = cpuName
-			stat.epoch = time.Now().Unix()
+            stat.epoch = time.Now().Unix()
 			for index, valueString := range tokens[1:] {
 				value, err := atoi(valueString)
 				if err != nil {
