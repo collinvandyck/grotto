@@ -121,6 +121,7 @@ type cpuStat struct {
 	system int
 	idle   int
 	total  int
+    epoch  int64
 }
 
 func (s *cpuStat) percentage(of int) float64 {
@@ -152,17 +153,18 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		nice:   other.nice - s.nice,
 		system: other.system - s.system,
 		idle:   other.idle - s.idle,
-		total:  other.total - s.total}
+		total:  other.total - s.total,
+        epoch:  other.epoch,
+    }
 }
 
 // gauge converts a cpuStat into a slice of gauges
 func (s *cpuStat) metrics() []gauge {
-	var measure_time int64 = time.Now().Unix()
 	result := make([]gauge, 4)
-	result[0] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "user"), MeasureTime: measure_time, Value: s.userPercentage(), Source: hostname}
-	result[1] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "nice"), MeasureTime: measure_time, Value: s.nicePercentage(), Source: hostname}
-	result[2] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "system"), MeasureTime: measure_time, Value: s.systemPercentage(), Source: hostname}
-	result[3] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "idle"), MeasureTime: measure_time, Value: s.idlePercentage(), Source: hostname}
+	result[0] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "user"), MeasureTime: s.epoch, Value: s.userPercentage(), Source: hostname}
+	result[1] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "nice"), MeasureTime: s.epoch, Value: s.nicePercentage(), Source: hostname}
+	result[2] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "system"), MeasureTime: s.epoch, Value: s.systemPercentage(), Source: hostname}
+	result[3] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "idle"), MeasureTime: s.epoch, Value: s.idlePercentage(), Source: hostname}
 	return result
 }
 
@@ -275,6 +277,7 @@ func readCpuStats() ([]cpuStat, error) {
 		if strings.HasPrefix(cpuName, "cpu") && len(cpuName) > 3 {
 			var stat cpuStat
 			stat.name = cpuName
+            stat.epoch = time.Now().Unix()
 			for index, valueString := range tokens[1:] {
 				value, err := atoi(valueString)
 				if err != nil {
