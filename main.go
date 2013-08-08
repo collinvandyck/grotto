@@ -19,11 +19,9 @@ import (
 )
 
 var (
-	conf         *config
-	httpClient   http.Client
-	cpuDelay     = 1 * time.Second
-	libratoDelay = 2 * time.Second
-	hostname     string
+	conf       *config
+	httpClient http.Client
+	hostname   string
 )
 
 func main() {
@@ -33,13 +31,13 @@ func main() {
 
 	conf, err = readConfig(*confFlag)
 	if err != nil {
-		fmt.Printf("Could not read config file: %s", err)
+		fmt.Printf("Could not read config file: %s\n", err)
 		os.Exit(1)
 	}
 
 	hostname, err = os.Hostname()
 	if err != nil {
-		fmt.Printf("Could not read hostname: %s", err)
+		fmt.Printf("Could not read hostname: %s\n", err)
 		os.Exit(1)
 	}
 
@@ -84,9 +82,13 @@ type gauge struct {
 // the global config struct.
 type config struct {
 	Librato struct {
-		Email string
-		Token string
-		Url   string
+		Email         string
+		Token         string
+		Url           string
+		PeriodSeconds int
+	}
+	Cpu struct {
+		PeriodSeconds int
 	}
 }
 
@@ -111,6 +113,14 @@ func readConfig(loc string) (*config, error) {
 	if conf.Librato.Url == "" {
 		return nil, errors.New("Missing Url for Librato")
 	}
+	if conf.Librato.PeriodSeconds <= 0 {
+        fmt.Printf("Using default value of 5 for conf.Librato.PeriodSeconds\n")
+		conf.Librato.PeriodSeconds = 5
+	}
+	if conf.Cpu.PeriodSeconds <= 0 {
+        fmt.Printf("Using default value of 1 for conf.Cpu.PeriodSeconds\n")
+		conf.Cpu.PeriodSeconds = 1
+	}
 	return &conf, nil
 }
 
@@ -122,7 +132,7 @@ type cpuStat struct {
 	system int
 	idle   int
 	total  int
-    epoch  int64
+	epoch  int64
 }
 
 func (s *cpuStat) percentage(of int) float64 {
@@ -130,7 +140,7 @@ func (s *cpuStat) percentage(of int) float64 {
 }
 
 func (s *cpuStat) usagePercentage() float64 {
-    return s.percentage(s.user + s.nice + s.system)
+	return s.percentage(s.user + s.nice + s.system)
 }
 
 func (s *cpuStat) userPercentage() float64 {
@@ -159,8 +169,8 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		system: other.system - s.system,
 		idle:   other.idle - s.idle,
 		total:  other.total - s.total,
-        epoch:  other.epoch,
-    }
+		epoch:  other.epoch,
+	}
 }
 
 // gauge converts a cpuStat into a slice of gauges
@@ -180,7 +190,7 @@ func startMetricsSender() chan interface{} {
 	metrics := make(chan interface{})
 	go func() {
 		// setup state
-		timeout := time.After(libratoDelay)
+		timeout := time.After(time.Duration(conf.Librato.PeriodSeconds) * time.Second)
 		payload := new(libratoPayload)
 		for {
 			// gather up as many payloads as we can in libratoDelay.
@@ -197,7 +207,7 @@ func startMetricsSender() chan interface{} {
 						fmt.Printf("Could not send payload: %s\n", err)
 					}
 				}(payload)
-				timeout = time.After(libratoDelay)
+                timeout = time.After(time.Duration(conf.Librato.PeriodSeconds) * time.Second)
 				payload = new(libratoPayload)
 			}
 		}
@@ -256,15 +266,16 @@ func monitorCpuUsage(metrics chan interface{}) {
 					lookup[stat.name] = stat
 				}
 			}
-			time.Sleep(cpuDelay)
+			time.Sleep(time.Duration(conf.Cpu.PeriodSeconds) * time.Second)
 		}
 	}()
 }
 
 // split splits a str based on separators of one or more whitespace tokens
 var whitespaceRegexp = regexp.MustCompile("\\s+")
+
 func split(str string) []string {
-    return whitespaceRegexp.Split(str, -1)
+	return whitespaceRegexp.Split(str, -1)
 }
 
 // readCpuStats reads /proc/stat, parses the values for the individual cpus
@@ -283,12 +294,12 @@ func readCpuStats() ([]cpuStat, error) {
 	scanner := bufio.NewScanner(bufio.NewReader(file))
 	for scanner.Scan() {
 		text := scanner.Text()
-        tokens := split(text)
+		tokens := split(text)
 		cpuName := tokens[0]
 		if strings.HasPrefix(cpuName, "cpu") {
 			var stat cpuStat
 			stat.name = cpuName
-            stat.epoch = time.Now().Unix()
+			stat.epoch = time.Now().Unix()
 			for index, valueString := range tokens[1:] {
 				value, err := atoi(valueString)
 				if err != nil {
