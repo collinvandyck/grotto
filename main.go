@@ -121,7 +121,7 @@ type cpuStat struct {
 	system int
 	idle   int
 	total  int
-    epoch  int64
+	epoch  int64
 }
 
 func (s *cpuStat) percentage(of int) float64 {
@@ -154,8 +154,8 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		system: other.system - s.system,
 		idle:   other.idle - s.idle,
 		total:  other.total - s.total,
-        epoch:  other.epoch,
-    }
+		epoch:  other.epoch,
+	}
 }
 
 // gauge converts a cpuStat into a slice of gauges
@@ -274,10 +274,10 @@ func readCpuStats() ([]cpuStat, error) {
 		text := scanner.Text()
 		tokens := strings.Split(text, " ")
 		cpuName := tokens[0]
-		if strings.HasPrefix(cpuName, "cpu") && len(cpuName) > 3 {
+		if strings.HasPrefix(cpuName, "cpu") {
 			var stat cpuStat
 			stat.name = cpuName
-            stat.epoch = time.Now().Unix()
+			stat.epoch = time.Now().Unix()
 			for index, valueString := range tokens[1:] {
 				value, err := atoi(valueString)
 				if err != nil {
