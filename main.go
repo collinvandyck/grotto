@@ -112,11 +112,11 @@ func readConfig(loc string) (*config, error) {
 		return nil, errors.New("Missing Url for Librato")
 	}
 	if conf.Librato.PeriodSeconds <= 0 {
-        fmt.Printf("Using default value of 5 for conf.Librato.PeriodSeconds\n")
+		fmt.Printf("Using default value of 5 for conf.Librato.PeriodSeconds\n")
 		conf.Librato.PeriodSeconds = 5
 	}
 	if conf.Cpu.PeriodSeconds <= 0 {
-        fmt.Printf("Using default value of 1 for conf.Cpu.PeriodSeconds\n")
+		fmt.Printf("Using default value of 1 for conf.Cpu.PeriodSeconds\n")
 		conf.Cpu.PeriodSeconds = 1
 	}
 	return &conf, nil
@@ -145,7 +145,7 @@ func startMetricsSender() chan interface{} {
 						fmt.Printf("Could not send payload: %s\n", err)
 					}
 				}(payload)
-                timeout = time.After(time.Duration(conf.Librato.PeriodSeconds) * time.Second)
+				timeout = time.After(time.Duration(conf.Librato.PeriodSeconds) * time.Second)
 				payload = new(libratoPayload)
 			}
 		}
@@ -193,4 +193,3 @@ var whitespaceRegexp = regexp.MustCompile("\\s+")
 func split(str string) []string {
 	return whitespaceRegexp.Split(str, -1)
 }
-

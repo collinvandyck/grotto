@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-
 // cpuStat holds values about cpu usage
 type cpuStat struct {
 	name   string
@@ -68,7 +67,6 @@ func (s *cpuStat) difference(other *cpuStat) cpuStat {
 		epoch:  other.epoch,
 	}
 }
-
 
 // monitorCpuUsage starts a goroutine and sends cpuStats to a channel
 // each successive cpuStat for a particular cpu will only consider values
@@ -149,4 +147,3 @@ func readCpuStats() ([]cpuStat, error) {
 	}
 	return stats, nil
 }
-
