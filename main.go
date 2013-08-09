@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -124,66 +122,6 @@ func readConfig(loc string) (*config, error) {
 	return &conf, nil
 }
 
-// cpuStat holds values about cpu usage
-type cpuStat struct {
-	name   string
-	user   int
-	nice   int
-	system int
-	idle   int
-	total  int
-	epoch  int64
-}
-
-func (s *cpuStat) percentage(of int) float64 {
-	return float64(of) / float64(s.total)
-}
-
-func (s *cpuStat) usagePercentage() float64 {
-	return s.percentage(s.user + s.nice + s.system)
-}
-
-func (s *cpuStat) userPercentage() float64 {
-	return s.percentage(s.user)
-}
-
-func (s *cpuStat) nicePercentage() float64 {
-	return s.percentage(s.nice)
-}
-
-func (s *cpuStat) systemPercentage() float64 {
-	return s.percentage(s.system)
-}
-
-func (s *cpuStat) idlePercentage() float64 {
-	return s.percentage(s.idle)
-}
-
-// difference subtracts the values of one cpuStat from the receiver and returns
-// a new struct
-func (s *cpuStat) difference(other *cpuStat) cpuStat {
-	return cpuStat{
-		name:   other.name,
-		user:   other.user - s.user,
-		nice:   other.nice - s.nice,
-		system: other.system - s.system,
-		idle:   other.idle - s.idle,
-		total:  other.total - s.total,
-		epoch:  other.epoch,
-	}
-}
-
-// gauge converts a cpuStat into a slice of gauges
-func (s *cpuStat) metrics() []gauge {
-	result := make([]gauge, 5)
-	result[0] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "user"), MeasureTime: s.epoch, Value: s.userPercentage(), Source: hostname}
-	result[1] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "nice"), MeasureTime: s.epoch, Value: s.nicePercentage(), Source: hostname}
-	result[2] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "system"), MeasureTime: s.epoch, Value: s.systemPercentage(), Source: hostname}
-	result[3] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "idle"), MeasureTime: s.epoch, Value: s.idlePercentage(), Source: hostname}
-	result[4] = gauge{Name: fmt.Sprintf("%s-%s", s.name, "usage"), MeasureTime: s.epoch, Value: s.usagePercentage(), Source: hostname}
-	return result
-}
-
 // startMetricsSender starts the goroutine that will consume payloads
 // and send them to Librato
 func startMetricsSender() chan interface{} {
@@ -240,35 +178,13 @@ func sendPayload(payload interface{}) error {
 	return nil
 }
 
-// monitorCpuUsage starts a goroutine and sends cpuStats to a channel
-// each successive cpuStat for a particular cpu will only consider values
-// since the last measurement.
-func monitorCpuUsage(metrics chan interface{}) {
-	lookup := make(map[string]cpuStat)
-	go func() {
-		for {
-			cpuStats, err := readCpuStats()
-			if err != nil {
-				fmt.Printf("Could not get cpu stats: %v\n", err)
-			} else {
-				for _, stat := range cpuStats {
-					cumulative, ok := lookup[stat.name]
-					if !ok {
-						cumulative = *new(cpuStat)
-						lookup[stat.name] = cumulative
-						// skip this one
-						continue
-					}
-					difference := cumulative.difference(&stat)
-					for _, metric := range difference.metrics() {
-						metrics <- metric
-					}
-					lookup[stat.name] = stat
-				}
-			}
-			time.Sleep(time.Duration(conf.Cpu.PeriodSeconds) * time.Second)
-		}
-	}()
+// atoi just is a proxy for strconv.Atoi, but it also returns a helpful error message
+func atoi(str string) (int, error) {
+	value, err := strconv.Atoi(str)
+	if err != nil {
+		return value, fmt.Errorf("Could not parse %s to int", str)
+	}
+	return value, nil
 }
 
 // split splits a str based on separators of one or more whitespace tokens
@@ -278,60 +194,3 @@ func split(str string) []string {
 	return whitespaceRegexp.Split(str, -1)
 }
 
-// readCpuStats reads /proc/stat, parses the values for the individual cpus
-// and then returns a slice of cpuStat, one for each cpu
-func readCpuStats() ([]cpuStat, error) {
-	file, err := os.Open("/proc/stat")
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			panic(err)
-		}
-	}()
-	stats := make([]cpuStat, 0)
-	scanner := bufio.NewScanner(bufio.NewReader(file))
-	for scanner.Scan() {
-		text := scanner.Text()
-		tokens := split(text)
-		cpuName := tokens[0]
-		if strings.HasPrefix(cpuName, "cpu") {
-			var stat cpuStat
-			stat.name = cpuName
-			stat.epoch = time.Now().Unix()
-			for index, valueString := range tokens[1:] {
-				value, err := atoi(valueString)
-				if err != nil {
-					return nil, err
-				}
-				switch index {
-				case 0:
-					stat.user = value
-				case 1:
-					stat.nice = value
-				case 2:
-					stat.system = value
-				case 3:
-					stat.idle = value
-				}
-				stat.total = stat.total + value
-			}
-
-			stats = append(stats, stat)
-		}
-	}
-	if err = scanner.Err(); err != nil {
-		return nil, err
-	}
-	return stats, nil
-}
-
-// atoi just is a proxy for strconv.Atoi, but it also returns a helpful error message
-func atoi(str string) (int, error) {
-	value, err := strconv.Atoi(str)
-	if err != nil {
-		return value, fmt.Errorf("Could not parse %s to int", str)
-	}
-	return value, nil
-}
