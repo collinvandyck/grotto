@@ -87,6 +87,7 @@ type config struct {
 	}
 	Cpu struct {
 		PeriodSeconds int
+		PerCoreGauges bool
 	}
 }
 

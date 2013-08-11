@@ -121,6 +121,10 @@ func readCpuStats() ([]cpuStat, error) {
 		tokens := split(text)
 		cpuName := tokens[0]
 		if strings.HasPrefix(cpuName, "cpu") {
+			if !conf.Cpu.PerCoreGauges && len(cpuName) > 3 {
+				// skip things like cpu0, cpu1, etc
+				continue
+			}
 			var stat cpuStat
 			stat.name = cpuName
 			stat.epoch = time.Now().Unix()
